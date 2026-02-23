@@ -39,8 +39,40 @@ const LOCAL_KEY = 'spyua_planner_v2';
 // --- Utilities ---
 const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36);
 const catInfo = k => CATEGORIES.find(c=>c.key===k)||{label:k,color:''};
-const zoneInfo = id => ZONES.find(z=>z.id===id)||{label:id,emoji:''};
+const zoneInfo = id => {
+  const z = ZONES.find(z=>z.id===id)||{label:id,emoji:''};
+  const custom = STATE.settings.zoneLabels?.[id];
+  return custom ? {...z, label: custom} : z;
+};
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function getCurrentMonth(){
+  const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+function getMetricsForCategory(cat){
+  return METRICS.filter(m=>m.cat===cat);
+}
+
+function getMetricTargets(metricKey){
+  const met=METRICS.find(m=>m.key===metricKey);
+  if(!met) return {weekTarget:0, yearTarget:0};
+  const custom=STATE.settings.metricTargets?.[metricKey];
+  return {
+    weekTarget: custom?.weekTarget ?? met.weekTarget,
+    yearTarget: custom?.yearTarget ?? met.yearTarget
+  };
+}
+
+function getActiveMetrics(){
+  const usedByTasks = new Set(STATE.tasks.map(t=>t.metricKey).filter(Boolean));
+  const usedInMonthly = new Set();
+  for(const month of Object.keys(STATE.monthly)){
+    for(const key of Object.keys(STATE.monthly[month])){
+      if(STATE.monthly[month][key] > 0) usedInMonthly.add(key);
+    }
+  }
+  return METRICS.filter(m => usedByTasks.has(m.key) || usedInMonthly.has(m.key));
+}
 
 // --- Default Data ---
 function defaultSlots(){
@@ -57,18 +89,18 @@ function defaultSlots(){
 
 function seedTasks(){
   const now=Date.now();
-  const mk=(title,category,estMins)=>({id:uid(),title,category,estMins,done:false,notes:'',createdAt:now});
+  const mk=(title,category,estMins,metricKey)=>({id:uid(),title,category,estMins,done:false,notes:'',createdAt:now,metricKey:metricKey||null});
   return [
-    mk('Agent閱讀（30-60頁）','agent',60),
-    mk('章節筆記整理（1頁）','writing',60),
-    mk('章節架構優化','writing',60),
-    mk('TOEIC 單字（30-50個）','toeic',30),
-    mk('TOEIC 聽力','toeic',30),
-    mk('TOEIC 閱讀題型','toeic',40),
-    mk('LeetCode（easy）','leetcode',45),
-    mk('LeetCode（medium）','leetcode',60),
-    mk('系統設計影片＋1頁筆記','sysdesign',45),
-    mk('運動（重訓/有氧）','fitness',45),
+    mk('Agent閱讀（30-60頁）','agent',60,'agent_read'),
+    mk('章節筆記整理（1頁）','writing',60,'writing'),
+    mk('章節架構優化','writing',60,'writing'),
+    mk('TOEIC 單字（30-50個）','toeic',30,'toeic_word'),
+    mk('TOEIC 聽力','toeic',30,'toeic_listen'),
+    mk('TOEIC 閱讀題型','toeic',40,'toeic_read'),
+    mk('LeetCode（easy）','leetcode',45,'leetcode'),
+    mk('LeetCode（medium）','leetcode',60,'leetcode'),
+    mk('系統設計影片＋1頁筆記','sysdesign',45,'sysdesign'),
+    mk('運動（重訓/有氧）','fitness',45,'fitness'),
   ];
 }
 
@@ -78,7 +110,7 @@ function emptyState(){
   return {
     tasks: seedTasks(),
     slots: defaultSlots(),
-    settings: { mirrorDone:true, autoSeed:true },
+    settings: { mirrorDone:true, autoSeed:true, zoneLabels:{}, metricTargets:{} },
     gist: { token:'', gistId:'' },
     monthly: emptyMonthly()
   };
@@ -112,9 +144,9 @@ function loadLocal(){
     if(!raw) return emptyState();
     const p=JSON.parse(raw);
     return {
-      tasks:Array.isArray(p.tasks)?p.tasks:seedTasks(),
+      tasks:Array.isArray(p.tasks)?p.tasks.map(t=>({metricKey:null,...t})):seedTasks(),
       slots:Array.isArray(p.slots)?p.slots:defaultSlots(),
-      settings:p.settings||{mirrorDone:true,autoSeed:true},
+      settings:{mirrorDone:true,autoSeed:true,zoneLabels:{},metricTargets:{},...p.settings},
       gist:p.gist||{token:'',gistId:''},
       monthly:p.monthly||emptyMonthly()
     };

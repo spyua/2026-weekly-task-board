@@ -2,9 +2,33 @@
 // ACTIONS — User interaction handlers
 // ============================================================
 
+// --- Zone label customization ---
+function updateZoneLabel(zoneId, label){
+  if(!STATE.settings.zoneLabels) STATE.settings.zoneLabels = {};
+  const trimmed = label.trim();
+  const defaultLabel = ZONES.find(z=>z.id===zoneId)?.label || '';
+  if(!trimmed || trimmed === defaultLabel){
+    delete STATE.settings.zoneLabels[zoneId];
+  } else {
+    STATE.settings.zoneLabels[zoneId] = trimmed;
+  }
+  render();
+}
+
 // --- Touch drag state ---
 let _touchDragTaskId = null;
 let _touchGhost = null;
+
+// --- Metric auto-sync ---
+function applyMetricDelta(taskId, delta){
+  if(!taskId) return;
+  const t=STATE.tasks.find(x=>x.id===taskId);
+  if(!t||!t.metricKey) return;
+  const month=getCurrentMonth();
+  if(!STATE.monthly[month]) STATE.monthly[month]={};
+  STATE.monthly[month][t.metricKey]=
+    Math.max(0,(STATE.monthly[month][t.metricKey]||0)+delta);
+}
 
 // --- Board actions ---
 function dropOnSlot(e,slotId){
@@ -18,16 +42,21 @@ function dropOnSlot(e,slotId){
 function toggleSlotDone(slotId){
   const slot=STATE.slots.find(s=>s.id===slotId);
   if(!slot)return;
+  snapshotForUndo();
+  const wasDone=slot.done;
   slot.done=!slot.done;
   if(STATE.settings.mirrorDone&&slot.taskId){
     const t=STATE.tasks.find(x=>x.id===slot.taskId);
     if(t)t.done=slot.done;
   }
+  applyMetricDelta(slot.taskId, wasDone ? -1 : +1);
   render();
 }
 
 function clearSlot(slotId){
   snapshotForUndo();
+  const slot=STATE.slots.find(s=>s.id===slotId);
+  if(slot&&slot.done&&slot.taskId) applyMetricDelta(slot.taskId, -1);
   STATE.slots=STATE.slots.map(s=>s.id===slotId?{...s,taskId:undefined,done:false}:s);
   render();
 }
@@ -36,15 +65,29 @@ function clearSlot(slotId){
 function toggleTaskDone(taskId){
   const t=STATE.tasks.find(x=>x.id===taskId);
   if(!t)return;
+  snapshotForUndo();
+  const wasDone=t.done;
   t.done=!t.done;
   if(STATE.settings.mirrorDone){
-    STATE.slots.forEach(s=>{if(s.taskId===taskId)s.done=t.done;});
+    STATE.slots.forEach(s=>{
+      if(s.taskId===taskId){
+        const slotWasDone=s.done;
+        s.done=t.done;
+        if(s.done&&!slotWasDone) applyMetricDelta(taskId, +1);
+        else if(!s.done&&slotWasDone) applyMetricDelta(taskId, -1);
+      }
+    });
+  } else {
+    applyMetricDelta(taskId, wasDone ? -1 : +1);
   }
   render();
 }
 
 function deleteTask(taskId){
   snapshotForUndo();
+  STATE.slots.forEach(s=>{
+    if(s.taskId===taskId&&s.done) applyMetricDelta(taskId, -1);
+  });
   STATE.tasks=STATE.tasks.filter(t=>t.id!==taskId);
   STATE.slots=STATE.slots.map(s=>s.taskId===taskId?{...s,taskId:undefined,done:false}:s);
   render();
@@ -56,7 +99,8 @@ function addTask(){
   const cat=document.getElementById('nt_cat')?.value||'agent';
   const mins=parseInt(document.getElementById('nt_mins')?.value)||undefined;
   const notes=(document.getElementById('nt_notes')?.value||'').trim();
-  STATE.tasks.unshift({id:uid(),title,category:cat,estMins:mins,notes:notes||undefined,done:false,createdAt:Date.now()});
+  const metricKey=(document.getElementById('nt_metric')?.value)||null;
+  STATE.tasks.unshift({id:uid(),title,category:cat,estMins:mins,notes:notes||undefined,done:false,createdAt:Date.now(),metricKey});
   render();
   setTimeout(()=>{const el=document.getElementById('nt_title');if(el){el.value='';el.focus();}},50);
 }
@@ -76,6 +120,8 @@ function assignTaskToSlot(slotId, taskId){
 // --- Task editing ---
 function startEditTask(taskId){
   _editingTaskId = taskId;
+  const t=STATE.tasks.find(x=>x.id===taskId);
+  _editingCat=t?t.category:null;
   render();
 }
 
@@ -88,12 +134,15 @@ function saveEditTask(taskId){
   t.category=document.getElementById('edit_cat_'+taskId)?.value||t.category;
   t.estMins=parseInt(document.getElementById('edit_mins_'+taskId)?.value)||undefined;
   t.notes=(document.getElementById('edit_notes_'+taskId)?.value||'').trim()||undefined;
+  t.metricKey=(document.getElementById('edit_metric_'+taskId)?.value)||null;
   _editingTaskId=null;
+  _editingCat=null;
   render();
 }
 
 function cancelEditTask(){
   _editingTaskId=null;
+  _editingCat=null;
   render();
 }
 
@@ -150,6 +199,34 @@ function _onTouchEnd(e){
     }
   }
   _touchDragTaskId=null;
+}
+
+// --- Metric target editing ---
+function toggleEditTargets(){ _editingTargets=true; render(); }
+function cancelEditTargets(){ _editingTargets=false; render(); }
+
+function saveMetricTargets(){
+  if(!STATE.settings.metricTargets) STATE.settings.metricTargets={};
+  getActiveMetrics().forEach(met=>{
+    const wEl=document.getElementById('mt_week_'+met.key);
+    const yEl=document.getElementById('mt_year_'+met.key);
+    if(!wEl||!yEl) return;
+    const w=parseInt(wEl.value)||0;
+    const y=parseInt(yEl.value)||0;
+    if(w===met.weekTarget && y===met.yearTarget){
+      delete STATE.settings.metricTargets[met.key];
+    } else {
+      STATE.settings.metricTargets[met.key]={weekTarget:w, yearTarget:y};
+    }
+  });
+  _editingTargets=false;
+  render();
+}
+
+function resetMetricTargets(){
+  STATE.settings.metricTargets={};
+  _editingTargets=false;
+  render();
 }
 
 // --- Monthly actions ---

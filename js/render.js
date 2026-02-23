@@ -7,8 +7,35 @@ let searchQuery = '';
 let dragTaskId = null;
 let selectedMonth = (() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; })();
 let _editingTaskId = null;
+let _editingTargets = false;
+let _newTaskCat = 'agent';
+let _editingCat = null;
 
 function icon(name,cls=''){return `<svg class="${cls}" width="16" height="16"><use href="#ico-${name}"/></svg>`}
+
+function renderMetricSelect(cat, selectedKey, idAttr){
+  const metrics=getMetricsForCategory(cat);
+  if(metrics.length===0) return `<input type="hidden" id="${idAttr}" value="">`;
+  if(metrics.length===1) return `<div class="form-group" style="margin-bottom:.5rem"><label>對應指標</label><span class="badge ${metrics[0].color}">${metrics[0].label}</span><input type="hidden" id="${idAttr}" value="${metrics[0].key}"></div>`;
+  return `<div class="form-group" style="margin-bottom:.5rem"><label>對應指標</label><select id="${idAttr}">${metrics.map(m=>`<option value="${m.key}" ${m.key===selectedKey?'selected':''}>${m.label}</option>`).join('')}</select></div>`;
+}
+
+function renderEditTaskForm(t){
+  const editCat=_editingCat||t.category;
+  return `<div class="task-item editing">
+    <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">標題</label><input type="text" id="edit_title_${t.id}" value="${esc(t.title)}" placeholder="標題"></div>
+    <div class="form-row" style="margin-bottom:.5rem">
+      <div class="form-group" style="margin-bottom:0"><label class="sr-only">分類</label><select id="edit_cat_${t.id}" onchange="_editingCat=this.value;render()">${CATEGORIES.map(c=>`<option value="${c.key}" ${editCat===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
+      <div class="form-group" style="margin-bottom:0"><label class="sr-only">預估分鐘</label><input type="number" id="edit_mins_${t.id}" value="${t.estMins||''}" placeholder="分鐘"></div>
+    </div>
+    ${renderMetricSelect(editCat, t.metricKey, 'edit_metric_'+t.id)}
+    <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">備註</label><textarea id="edit_notes_${t.id}" placeholder="備註">${esc(t.notes||'')}</textarea></div>
+    <div class="flex gap-1">
+      <button class="btn sm primary" onclick="saveEditTask('${t.id}')">儲存</button>
+      <button class="btn sm" onclick="cancelEditTask()">取消</button>
+    </div>
+  </div>`;
+}
 
 // --- Focus save / restore (fixes search defocus bug) ---
 let _savedFocus = null;
@@ -216,20 +243,7 @@ function renderSlot(slot){
 
 function renderTaskCard(t,draggable=false){
   const ci=catInfo(t.category);
-  if(_editingTaskId===t.id){
-    return `<div class="task-item editing">
-      <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">標題</label><input type="text" id="edit_title_${t.id}" value="${esc(t.title)}" placeholder="標題"></div>
-      <div class="form-row" style="margin-bottom:.5rem">
-        <div class="form-group" style="margin-bottom:0"><label class="sr-only">分類</label><select id="edit_cat_${t.id}">${CATEGORIES.map(c=>`<option value="${c.key}" ${t.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
-        <div class="form-group" style="margin-bottom:0"><label class="sr-only">預估分鐘</label><input type="number" id="edit_mins_${t.id}" value="${t.estMins||''}" placeholder="分鐘"></div>
-      </div>
-      <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">備註</label><textarea id="edit_notes_${t.id}" placeholder="備註">${esc(t.notes||'')}</textarea></div>
-      <div class="flex gap-1">
-        <button class="btn sm primary" onclick="saveEditTask('${t.id}')">儲存</button>
-        <button class="btn sm" onclick="cancelEditTask()">取消</button>
-      </div>
-    </div>`;
-  }
+  if(_editingTaskId===t.id) return renderEditTaskForm(t);
   return `<div class="task-item ${t.done?'done':''}" ${draggable?`draggable="true" ondragstart="dragTaskId='${t.id}'" ontouchstart="onTaskTouchStart(event,'${t.id}')"`:''}>
     <div class="task-meta">
       <span class="badge ${ci.color}">${ci.label}</span>
@@ -247,6 +261,7 @@ function renderTaskCard(t,draggable=false){
 
 // --- Monthly Panel ---
 function renderMonthlyPanel(){
+  const activeMetrics = getActiveMetrics();
   const [year,mon]=selectedMonth.split('-').map(Number);
   const data=getMonthData(selectedMonth);
   const monthLabel=`${year} 年 ${mon} 月`;
@@ -256,12 +271,40 @@ function renderMonthlyPanel(){
       <button class="btn sm" onclick="shiftMonth(-1)">◀</button>
       <div class="current-month">${monthLabel}</div>
       <button class="btn sm" onclick="shiftMonth(1)">▶</button>
+      <button class="btn sm" onclick="toggleEditTargets()" style="margin-left:auto">✏️ 編輯目標</button>
     </div>
 
+    ${_editingTargets?`<div class="card" style="margin-bottom:1rem">
+      <div class="card-header"><h2>🎯 編輯指標目標</h2></div>
+      <div class="card-body" style="overflow-x:auto">
+        <table class="plan-table" style="width:100%">
+          <thead><tr><th>指標</th><th>週目標</th><th>年目標</th></tr></thead>
+          <tbody>
+            ${activeMetrics.map(met=>{
+              const targets=getMetricTargets(met.key);
+              return `<tr>
+                <td><span class="badge ${met.color}">${met.label}</span> <span class="text-xs text-muted">${met.unit}</span></td>
+                <td><input type="number" id="mt_week_${met.key}" value="${targets.weekTarget}" min="0" style="width:80px" onfocus="this.select()"></td>
+                <td><input type="number" id="mt_year_${met.key}" value="${targets.yearTarget}" min="0" style="width:80px" onfocus="this.select()"></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        <div class="flex gap-1 flex-wrap" style="margin-top:.75rem">
+          <button class="btn primary sm" onclick="saveMetricTargets()">儲存</button>
+          <button class="btn sm" onclick="cancelEditTargets()">取消</button>
+          <button class="btn sm danger" onclick="if(confirm('確定重置所有目標為預設值？'))resetMetricTargets()" style="margin-left:auto">重置為預設</button>
+        </div>
+      </div>
+    </div>`:''}
+
+    ${activeMetrics.length===0?'<div class="tip">目前沒有任何指標。請先在任務池新增帶有指標的任務。</div>':''}
+
     <div class="metric-grid">
-      ${METRICS.map(met=>{
+      ${activeMetrics.map(met=>{
         const val=data[met.key]||0;
-        const monthTarget=Math.round(met.weekTarget*4.33);
+        const targets=getMetricTargets(met.key);
+        const monthTarget=Math.round(targets.weekTarget*4.33);
         const pct=monthTarget>0?Math.min(100,Math.round(val/monthTarget*100)):0;
         const barColor=`var(--${met.color})`;
         return `<div class="metric-card">
@@ -287,14 +330,15 @@ function renderMonthlyPanel(){
 
     <div class="yearly-summary">
       <h3>📊 ${year} 年度累積進度</h3>
-      ${METRICS.map(met=>{
+      ${activeMetrics.map(met=>{
         const total=getYearlyTotal(met.key,year);
-        const pct=met.yearTarget>0?Math.min(100,Math.round(total/met.yearTarget*100)):0;
+        const targets=getMetricTargets(met.key);
+        const pct=targets.yearTarget>0?Math.min(100,Math.round(total/targets.yearTarget*100)):0;
         const barColor=`var(--${met.color})`;
         return `<div class="yearly-row">
           <div class="yr-label"><span class="badge ${met.color}">${met.label}</span></div>
           <div class="yr-bar"><div class="yr-fill" style="width:${pct}%;background:${barColor}"></div></div>
-          <div class="yr-nums">${total} / ${met.yearTarget} ${met.unit}</div>
+          <div class="yr-nums">${total} / ${targets.yearTarget} ${met.unit}</div>
         </div>`;
       }).join('')}
     </div>
@@ -302,17 +346,18 @@ function renderMonthlyPanel(){
     <div class="card" style="margin-bottom:1rem">
       <div class="card-header"><h2>🗓️ ${year} 年各月一覽</h2></div>
       <div class="card-body">
-        ${METRICS.map(met=>{
+        ${activeMetrics.map(met=>{
+          const targets=getMetricTargets(met.key);
           return `<div style="margin-bottom:1rem">
             <div style="font-size:.85rem;font-weight:600;margin-bottom:.35rem;display:flex;align-items:center;gap:.4rem">
               <span class="badge ${met.color}">${met.label}</span>
-              <span class="text-xs text-muted">年目標 ${met.yearTarget} ${met.unit}</span>
+              <span class="text-xs text-muted">年目標 ${targets.yearTarget} ${met.unit}</span>
             </div>
             <div class="month-history">
               ${MONTH_LABELS.map((ml,i)=>{
                 const mKey=`${year}-${String(i+1).padStart(2,'0')}`;
                 const v=STATE.monthly[mKey]?.[met.key]||0;
-                const monthTarget=Math.round(met.weekTarget*4.33);
+                const monthTarget=Math.round(targets.weekTarget*4.33);
                 const ratio=monthTarget>0?v/monthTarget:0;
                 const bg=ratio>=1?'rgba(61,214,140,.15)':ratio>=0.5?'rgba(240,152,62,.1)':'transparent';
                 const isActive=mKey===selectedMonth;
@@ -504,9 +549,10 @@ function renderTasksPanel(){
       <div class="card-body">
         <div class="form-group"><label>標題</label><input type="text" id="nt_title" placeholder="例如：Agent閱讀（30-60頁）" onkeydown="if(event.key==='Enter')addTask()"></div>
         <div class="form-row">
-          <div class="form-group"><label>分類</label><select id="nt_cat">${CATEGORIES.map(c=>`<option value="${c.key}">${c.label}</option>`).join('')}</select></div>
+          <div class="form-group"><label>分類</label><select id="nt_cat" onchange="_newTaskCat=this.value;render()">${CATEGORIES.map(c=>`<option value="${c.key}" ${_newTaskCat===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
           <div class="form-group"><label>預估分鐘</label><input type="number" id="nt_mins" placeholder="45"></div>
         </div>
+        ${renderMetricSelect(_newTaskCat, null, 'nt_metric')}
         <div class="form-group"><label>備註</label><textarea id="nt_notes" placeholder="可空"></textarea></div>
         <div class="flex gap-1">
           <button class="btn primary" onclick="addTask()">${icon('plus')} 新增</button>
@@ -530,20 +576,7 @@ function renderTasksPanel(){
           ${filtered.map(t=>{
             const ci=catInfo(t.category);
             const scheduled=assignedIds.has(t.id);
-            if(_editingTaskId===t.id){
-              return `<div class="task-item editing">
-                <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">標題</label><input type="text" id="edit_title_${t.id}" value="${esc(t.title)}" placeholder="標題"></div>
-                <div class="form-row" style="margin-bottom:.5rem">
-                  <div class="form-group" style="margin-bottom:0"><label class="sr-only">分類</label><select id="edit_cat_${t.id}">${CATEGORIES.map(c=>`<option value="${c.key}" ${t.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
-                  <div class="form-group" style="margin-bottom:0"><label class="sr-only">預估分鐘</label><input type="number" id="edit_mins_${t.id}" value="${t.estMins||''}" placeholder="分鐘"></div>
-                </div>
-                <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">備註</label><textarea id="edit_notes_${t.id}" placeholder="備註">${esc(t.notes||'')}</textarea></div>
-                <div class="flex gap-1">
-                  <button class="btn sm primary" onclick="saveEditTask('${t.id}')">儲存</button>
-                  <button class="btn sm" onclick="cancelEditTask()">取消</button>
-                </div>
-              </div>`;
-            }
+            if(_editingTaskId===t.id) return renderEditTaskForm(t);
             return `<div class="task-item ${t.done?'done':''}">
               <div class="task-meta">
                 <span class="badge ${ci.color}">${ci.label}</span>
@@ -616,6 +649,14 @@ function renderSettingsPanel(){
         <div class="setting-row">
           <div class="info"><div class="title">重置本週時，自動補預設任務</div><div class="desc">適合每週重新排一次，保持節奏</div></div>
           <label class="toggle"><input type="checkbox" aria-label="重置時自動補預設任務" ${STATE.settings.autoSeed?'checked':''} onchange="STATE.settings.autoSeed=this.checked;saveLocal()"><span class="slider"></span></label>
+        </div>
+        <hr class="sep">
+        <h3 style="font-size:.95rem;font-weight:600;margin-bottom:.75rem">🕐 時段時間設定</h3>
+        <div class="zone-label-settings">
+          ${ZONES.map(z=>`<div class="zone-label-row">
+            <span>${z.emoji}</span>
+            <input type="text" value="${esc(STATE.settings.zoneLabels?.[z.id]||z.label)}" onchange="updateZoneLabel('${z.id}',this.value)">
+          </div>`).join('')}
         </div>
         <hr class="sep">
         <div class="flex gap-1 flex-wrap">
