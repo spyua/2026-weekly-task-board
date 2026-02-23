@@ -47,7 +47,10 @@ function toggleSlotDone(slotId){
   slot.done=!slot.done;
   if(STATE.settings.mirrorDone&&slot.taskId){
     const t=STATE.tasks.find(x=>x.id===slot.taskId);
-    if(t)t.done=slot.done;
+    if(t){
+      const allSlots=STATE.slots.filter(s=>s.taskId===slot.taskId);
+      t.done=allSlots.every(s=>s.done);
+    }
   }
   applyMetricDelta(slot.taskId, wasDone ? -1 : +1);
   render();

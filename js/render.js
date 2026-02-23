@@ -68,10 +68,7 @@ function computeProgress(){
   const assigned=STATE.slots.filter(s=>s.taskId);
   const total=assigned.length;
   if(!total)return{total:0,done:0,pct:0};
-  const done=assigned.filter(s=>{
-    const t=STATE.tasks.find(x=>x.id===s.taskId);
-    return(s.done||false)||(t?.done||false);
-  }).length;
+  const done=assigned.filter(s=>s.done).length;
   return{total,done,pct:Math.round(done/total*100)};
 }
 
@@ -153,11 +150,19 @@ function renderContent(){
 }
 
 // --- Board ---
+function getAssignCount(){
+  const counts={};
+  STATE.slots.forEach(s=>{if(s.taskId){counts[s.taskId]=(counts[s.taskId]||0)+1;}});
+  return counts;
+}
+
 function renderBoard(){
-  const unassigned = getUnassigned();
+  const filtered = getFiltered();
+  const assignCounts = getAssignCount();
+  const assignedCount = Object.keys(assignCounts).length;
   return `<div class="board-grid fade-in">
     <div class="card">
-      <div class="card-header"><h2>📦 任務池</h2><span class="badge">未排：${unassigned.length}</span></div>
+      <div class="card-header"><h2>📦 任務池</h2><span class="badge">共 ${filtered.length} 個（${assignedCount} 已排）</span></div>
       <div class="card-body">
         <div class="form-group"><input type="text" id="search-input" placeholder="搜尋任務…" value="${esc(searchQuery)}" oninput="searchQuery=this.value;render()"></div>
         <div class="form-group">
@@ -168,7 +173,7 @@ function renderBoard(){
         </div>
         <hr class="sep">
         <div style="max-height:500px;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem">
-          ${unassigned.length===0?'<div class="tip">所有任務都已排入時段 ✓</div>':unassigned.map(t=>renderTaskCard(t,true)).join('')}
+          ${filtered.length===0?'<div class="tip">沒有符合條件的任務</div>':filtered.map(t=>renderTaskCard(t,true,assignCounts[t.id]||0)).join('')}
         </div>
       </div>
     </div>
@@ -193,7 +198,7 @@ function renderStats(){
     const t=STATE.tasks.find(x=>x.id===s.taskId);
     if(!t)return;
     catDone[t.category].total++;
-    if(s.done||t.done)catDone[t.category].done++;
+    if(s.done)catDone[t.category].done++;
   });
   return `<div class="stats-row">
     <div class="stat-card"><div class="val" style="color:var(--accent)">${prog.pct}%</div><div class="label">完成率</div></div>
@@ -217,10 +222,10 @@ function renderDayCol(day){
 
 function renderSlot(slot){
   const task=slot.taskId?STATE.tasks.find(t=>t.id===slot.taskId):null;
-  const isDone=(slot.done||false)||(task?.done||false);
+  const isDone=slot.done||false;
   const zi=zoneInfo(slot.zoneId);
   const cls=`slot ${task?'has-task':''} ${isDone?'done':''}`;
-  const unassigned = getUnassigned();
+  const allTasks = getFiltered();
   return `<div class="${cls}" data-slot-id="${esc(slot.id)}" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="dropOnSlot(event,'${esc(slot.id)}');this.classList.remove('drag-over')">
     <div class="zone-label">${zi.emoji} ${zi.label}</div>
     ${task?`
@@ -234,20 +239,21 @@ function renderSlot(slot){
         <button class="icon-btn" onclick="clearSlot('${esc(slot.id)}')" aria-label="清空時段">${icon('trash')}</button>
       </div>
     `:`<div class="slot-placeholder">拖曳任務到這裡</div>
-      ${unassigned.length>0?`<select class="slot-assign-select" aria-label="選擇任務指派到此時段" onchange="if(this.value)assignTaskToSlot('${esc(slot.id)}',this.value)">
+      ${allTasks.length>0?`<select class="slot-assign-select" aria-label="選擇任務指派到此時段" onchange="if(this.value)assignTaskToSlot('${esc(slot.id)}',this.value)">
         <option value="">鍵盤指派…</option>
-        ${unassigned.map(t=>`<option value="${t.id}">${esc(t.title)}</option>`).join('')}
+        ${allTasks.map(t=>`<option value="${t.id}">${esc(t.title)}</option>`).join('')}
       </select>`:''}`}
   </div>`;
 }
 
-function renderTaskCard(t,draggable=false){
+function renderTaskCard(t,draggable=false,assignCount=0){
   const ci=catInfo(t.category);
   if(_editingTaskId===t.id) return renderEditTaskForm(t);
   return `<div class="task-item ${t.done?'done':''}" ${draggable?`draggable="true" ondragstart="dragTaskId='${t.id}'" ontouchstart="onTaskTouchStart(event,'${t.id}')"`:''}>
     <div class="task-meta">
       <span class="badge ${ci.color}">${ci.label}</span>
       ${t.estMins?`<span class="text-xs text-muted">約${t.estMins}分</span>`:''}
+      ${assignCount>0?`<span class="badge green">已排 ${assignCount} 次</span>`:''}
     </div>
     <div class="task-title">${esc(t.title)}</div>
     ${t.notes?`<div class="task-notes">${esc(t.notes)}</div>`:''}
