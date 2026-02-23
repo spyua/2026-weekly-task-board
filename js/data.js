@@ -86,6 +86,24 @@ function emptyState(){
 
 // --- State ---
 let STATE = emptyState();
+let _undoSnapshot = null;
+
+function snapshotForUndo(){
+  _undoSnapshot = JSON.parse(JSON.stringify(STATE));
+}
+
+function restoreUndo(){
+  if(!_undoSnapshot) return;
+  STATE = _undoSnapshot;
+  _undoSnapshot = null;
+  render();
+}
+
+function addSeedTasksDeduped(){
+  const existingTitles = new Set(STATE.tasks.map(t => t.title));
+  const newTasks = seedTasks().filter(t => !existingTitles.has(t.title));
+  STATE.tasks = [...newTasks, ...STATE.tasks];
+}
 
 // --- Persistence ---
 function loadLocal(){

@@ -6,8 +6,35 @@ let filterCat = 'all';
 let searchQuery = '';
 let dragTaskId = null;
 let selectedMonth = (() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; })();
+let _editingTaskId = null;
 
 function icon(name,cls=''){return `<svg class="${cls}" width="16" height="16"><use href="#ico-${name}"/></svg>`}
+
+// --- Focus save / restore (fixes search defocus bug) ---
+let _savedFocus = null;
+function saveFocus(){
+  const el = document.activeElement;
+  if(!el || el===document.body) { _savedFocus=null; return; }
+  _savedFocus = {
+    id: el.id || null,
+    selStart: el.selectionStart ?? null,
+    selEnd: el.selectionEnd ?? null,
+  };
+}
+function restoreFocus(){
+  if(!_savedFocus) return;
+  const f = _savedFocus;
+  _savedFocus = null;
+  if(!f.id) return;
+  requestAnimationFrame(()=>{
+    const el = document.getElementById(f.id);
+    if(!el) return;
+    el.focus();
+    if(f.selStart!==null && typeof el.setSelectionRange==='function'){
+      try{ el.setSelectionRange(f.selStart,f.selEnd); }catch(e){}
+    }
+  });
+}
 
 // --- Computed helpers ---
 function computeProgress(){
@@ -47,23 +74,26 @@ function getYearlyTotal(metricKey,year){
 
 // --- Main render ---
 function render(){
+  saveFocus();
   saveLocal();
   renderHeader();
   renderTabs();
   renderContent();
+  restoreFocus();
 }
 
 function renderHeader(){
   const prog = computeProgress();
   document.getElementById('headerActions').innerHTML = `
     <div class="flex items-center gap-1 flex-wrap">
-      <button class="btn sm" onclick="toggleTheme()" id="themeBtn" title="切換亮/暗色">${document.documentElement.getAttribute('data-theme')==='light'?'🌙 暗色':'☀️ 亮色'}</button>
-      <span class="badge green">${prog.done}/${prog.total}（${prog.pct}%）</span>
+      <button class="btn sm" onclick="toggleTheme()" id="themeBtn" title="切換亮/暗色" aria-label="切換亮色或暗色主題">${document.documentElement.getAttribute('data-theme')==='light'?'🌙 暗色':'☀️ 亮色'}</button>
+      <div aria-live="polite"><span class="badge green">${prog.done}/${prog.total}（${prog.pct}%）</span></div>
       <div style="width:120px"><div class="progress-bar"><div class="fill" style="width:${prog.pct}%"></div></div></div>
-      <button class="btn sm" onclick="doExport()">${icon('download')} 匯出</button>
-      <button class="btn sm" onclick="document.getElementById('importFile').click()">${icon('upload')} 匯入</button>
+      <button class="btn sm" onclick="doExport()" aria-label="匯出資料">${icon('download')} 匯出</button>
+      <button class="btn sm" onclick="document.getElementById('importFile').click()" aria-label="匯入資料">${icon('upload')} 匯入</button>
       <input type="file" id="importFile" accept=".json" class="hidden" onchange="doImport(event)">
-      <button class="btn sm" onclick="doReset()">${icon('refresh')} 重置</button>
+      <button class="btn sm" onclick="doReset()" aria-label="重置本週排程">${icon('refresh')} 重置</button>
+      <button class="btn sm" onclick="restoreUndo()" aria-label="復原上一步操作">${icon('refresh')} 復原</button>
     </div>`;
 }
 
@@ -76,21 +106,23 @@ function renderTabs(){
     {id:'sync',label:'☁️ 同步'},
     {id:'settings',label:'⚙️ 設定'},
   ];
-  document.getElementById('tabNav').innerHTML = tabs.map(t=>
-    `<button class="tab ${currentTab===t.id?'active':''}" onclick="switchTab('${t.id}')">${t.label}</button>`
-  ).join('');
+  document.getElementById('tabNav').innerHTML = `<div role="tablist">${tabs.map(t=>
+    `<button class="tab ${currentTab===t.id?'active':''}" role="tab" aria-selected="${currentTab===t.id}" aria-controls="tabContent" tabindex="${currentTab===t.id?'0':'-1'}" onclick="switchTab('${t.id}')">${t.label}</button>`
+  ).join('')}</div>`;
 }
 
 function switchTab(id){currentTab=id;render();}
 
 function renderContent(){
   const el=document.getElementById('tabContent');
-  if(currentTab==='board') el.innerHTML=renderBoard();
-  else if(currentTab==='monthly') el.innerHTML=renderMonthlyPanel();
-  else if(currentTab==='plan') el.innerHTML=renderPlanPanel();
-  else if(currentTab==='tasks') el.innerHTML=renderTasksPanel();
-  else if(currentTab==='sync') el.innerHTML=renderSyncPanel();
-  else if(currentTab==='settings') el.innerHTML=renderSettingsPanel();
+  let html='';
+  if(currentTab==='board') html=renderBoard();
+  else if(currentTab==='monthly') html=renderMonthlyPanel();
+  else if(currentTab==='plan') html=renderPlanPanel();
+  else if(currentTab==='tasks') html=renderTasksPanel();
+  else if(currentTab==='sync') html=renderSyncPanel();
+  else if(currentTab==='settings') html=renderSettingsPanel();
+  el.innerHTML=`<div role="tabpanel" aria-labelledby="tab-${currentTab}">${html}</div>`;
 }
 
 // --- Board ---
@@ -100,7 +132,7 @@ function renderBoard(){
     <div class="card">
       <div class="card-header"><h2>📦 任務池</h2><span class="badge">未排：${unassigned.length}</span></div>
       <div class="card-body">
-        <div class="form-group"><input type="text" placeholder="搜尋任務…" value="${esc(searchQuery)}" oninput="searchQuery=this.value;render()"></div>
+        <div class="form-group"><input type="text" id="search-input" placeholder="搜尋任務…" value="${esc(searchQuery)}" oninput="searchQuery=this.value;render()"></div>
         <div class="form-group">
           <select onchange="filterCat=this.value;render()">
             <option value="all" ${filterCat==='all'?'selected':''}>全部（${STATE.tasks.length}）</option>
@@ -161,7 +193,8 @@ function renderSlot(slot){
   const isDone=(slot.done||false)||(task?.done||false);
   const zi=zoneInfo(slot.zoneId);
   const cls=`slot ${task?'has-task':''} ${isDone?'done':''}`;
-  return `<div class="${cls}" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="dropOnSlot(event,'${esc(slot.id)}');this.classList.remove('drag-over')">
+  const unassigned = getUnassigned();
+  return `<div class="${cls}" data-slot-id="${esc(slot.id)}" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="dropOnSlot(event,'${esc(slot.id)}');this.classList.remove('drag-over')">
     <div class="zone-label">${zi.emoji} ${zi.label}</div>
     ${task?`
       <div style="margin-top:.35rem">
@@ -170,16 +203,34 @@ function renderSlot(slot){
         <div class="task-title" style="${isDone?'text-decoration:line-through;opacity:.5':''}">${esc(task.title)}</div>
       </div>
       <div class="slot-actions">
-        <button class="icon-btn ${isDone?'done-active':''}" onclick="toggleSlotDone('${esc(slot.id)}')" title="完成">${icon('check')}</button>
-        <button class="icon-btn" onclick="clearSlot('${esc(slot.id)}')" title="清空">${icon('trash')}</button>
+        <button class="icon-btn ${isDone?'done-active':''}" onclick="toggleSlotDone('${esc(slot.id)}')" aria-label="標記完成">${icon('check')}</button>
+        <button class="icon-btn" onclick="clearSlot('${esc(slot.id)}')" aria-label="清空時段">${icon('trash')}</button>
       </div>
-    `:`<div class="slot-placeholder">拖曳任務到這裡</div>`}
+    `:`<div class="slot-placeholder">拖曳任務到這裡</div>
+      ${unassigned.length>0?`<select class="slot-assign-select" aria-label="選擇任務指派到此時段" onchange="if(this.value)assignTaskToSlot('${esc(slot.id)}',this.value)">
+        <option value="">鍵盤指派…</option>
+        ${unassigned.map(t=>`<option value="${t.id}">${esc(t.title)}</option>`).join('')}
+      </select>`:''}`}
   </div>`;
 }
 
 function renderTaskCard(t,draggable=false){
   const ci=catInfo(t.category);
-  return `<div class="task-item ${t.done?'done':''}" ${draggable?`draggable="true" ondragstart="dragTaskId='${t.id}'"`:''}>
+  if(_editingTaskId===t.id){
+    return `<div class="task-item editing">
+      <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">標題</label><input type="text" id="edit_title_${t.id}" value="${esc(t.title)}" placeholder="標題"></div>
+      <div class="form-row" style="margin-bottom:.5rem">
+        <div class="form-group" style="margin-bottom:0"><label class="sr-only">分類</label><select id="edit_cat_${t.id}">${CATEGORIES.map(c=>`<option value="${c.key}" ${t.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
+        <div class="form-group" style="margin-bottom:0"><label class="sr-only">預估分鐘</label><input type="number" id="edit_mins_${t.id}" value="${t.estMins||''}" placeholder="分鐘"></div>
+      </div>
+      <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">備註</label><textarea id="edit_notes_${t.id}" placeholder="備註">${esc(t.notes||'')}</textarea></div>
+      <div class="flex gap-1">
+        <button class="btn sm primary" onclick="saveEditTask('${t.id}')">儲存</button>
+        <button class="btn sm" onclick="cancelEditTask()">取消</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="task-item ${t.done?'done':''}" ${draggable?`draggable="true" ondragstart="dragTaskId='${t.id}'" ontouchstart="onTaskTouchStart(event,'${t.id}')"`:''}>
     <div class="task-meta">
       <span class="badge ${ci.color}">${ci.label}</span>
       ${t.estMins?`<span class="text-xs text-muted">約${t.estMins}分</span>`:''}
@@ -187,8 +238,9 @@ function renderTaskCard(t,draggable=false){
     <div class="task-title">${esc(t.title)}</div>
     ${t.notes?`<div class="task-notes">${esc(t.notes)}</div>`:''}
     <div class="task-actions">
-      <button class="icon-btn" onclick="toggleTaskDone('${t.id}')" title="完成">${icon('check')}</button>
-      <button class="icon-btn" onclick="deleteTask('${t.id}')" title="刪除">${icon('trash')}</button>
+      <button class="icon-btn" onclick="startEditTask('${t.id}')" aria-label="編輯任務">${icon('edit')}</button>
+      <button class="icon-btn" onclick="toggleTaskDone('${t.id}')" aria-label="標記完成">${icon('check')}</button>
+      <button class="icon-btn" onclick="deleteTask('${t.id}')" aria-label="刪除任務">${icon('trash')}</button>
     </div>
   </div>`;
 }
@@ -429,7 +481,7 @@ function renderPlanPanel(){
 function renderQuarter(num,title,focus,color,items,milestones,currentQ){
   const isCurrent=num===currentQ;
   return `<div class="quarter" style="margin-bottom:1rem;${isCurrent?'border-color:var(--'+color+');box-shadow:0 0 20px rgba(108,140,255,.08)':''}">
-    <div class="quarter-header" onclick="this.parentElement.querySelector('.quarter-body').style.display=this.parentElement.querySelector('.quarter-body').style.display==='none'?'block':'block'">
+    <div class="quarter-header" onclick="this.parentElement.querySelector('.quarter-body').style.display=this.parentElement.querySelector('.quarter-body').style.display==='none'?'block':'none'">
       <h3><span class="q-badge badge ${color}">Q${num}</span> ${esc(title)} ${isCurrent?'<span class="badge green" style="margin-left:.5rem">← 目前</span>':''}</h3>
     </div>
     <div class="quarter-body">
@@ -467,7 +519,7 @@ function renderTasksPanel(){
       <div class="card-header"><h2>📋 全部任務</h2><span class="badge">${STATE.tasks.length} 個</span></div>
       <div class="card-body">
         <div class="form-row mb-1">
-          <input type="text" placeholder="搜尋…" value="${esc(searchQuery)}" oninput="searchQuery=this.value;render()">
+          <input type="text" id="search-input" placeholder="搜尋…" value="${esc(searchQuery)}" oninput="searchQuery=this.value;render()">
           <select onchange="filterCat=this.value;render()">
             <option value="all">全部</option>
             ${CATEGORIES.map(c=>`<option value="${c.key}" ${filterCat===c.key?'selected':''}>${c.label}</option>`).join('')}
@@ -478,6 +530,20 @@ function renderTasksPanel(){
           ${filtered.map(t=>{
             const ci=catInfo(t.category);
             const scheduled=assignedIds.has(t.id);
+            if(_editingTaskId===t.id){
+              return `<div class="task-item editing">
+                <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">標題</label><input type="text" id="edit_title_${t.id}" value="${esc(t.title)}" placeholder="標題"></div>
+                <div class="form-row" style="margin-bottom:.5rem">
+                  <div class="form-group" style="margin-bottom:0"><label class="sr-only">分類</label><select id="edit_cat_${t.id}">${CATEGORIES.map(c=>`<option value="${c.key}" ${t.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
+                  <div class="form-group" style="margin-bottom:0"><label class="sr-only">預估分鐘</label><input type="number" id="edit_mins_${t.id}" value="${t.estMins||''}" placeholder="分鐘"></div>
+                </div>
+                <div class="form-group" style="margin-bottom:.5rem"><label class="sr-only">備註</label><textarea id="edit_notes_${t.id}" placeholder="備註">${esc(t.notes||'')}</textarea></div>
+                <div class="flex gap-1">
+                  <button class="btn sm primary" onclick="saveEditTask('${t.id}')">儲存</button>
+                  <button class="btn sm" onclick="cancelEditTask()">取消</button>
+                </div>
+              </div>`;
+            }
             return `<div class="task-item ${t.done?'done':''}">
               <div class="task-meta">
                 <span class="badge ${ci.color}">${ci.label}</span>
@@ -487,8 +553,9 @@ function renderTasksPanel(){
               <div class="task-title">${esc(t.title)}</div>
               ${t.notes?`<div class="task-notes">${esc(t.notes)}</div>`:''}
               <div class="task-actions">
-                <button class="icon-btn" onclick="toggleTaskDone('${t.id}')">${icon('check')}</button>
-                <button class="icon-btn" onclick="deleteTask('${t.id}')">${icon('trash')}</button>
+                <button class="icon-btn" onclick="startEditTask('${t.id}')" aria-label="編輯任務">${icon('edit')}</button>
+                <button class="icon-btn" onclick="toggleTaskDone('${t.id}')" aria-label="標記完成">${icon('check')}</button>
+                <button class="icon-btn" onclick="deleteTask('${t.id}')" aria-label="刪除任務">${icon('trash')}</button>
               </div>
             </div>`;
           }).join('')}
@@ -544,11 +611,11 @@ function renderSettingsPanel(){
       <div class="card-body">
         <div class="setting-row">
           <div class="info"><div class="title">時段完成 ＝ 任務完成（同步）</div><div class="desc">勾選時段完成時，同步把任務標記完成</div></div>
-          <label class="toggle"><input type="checkbox" ${STATE.settings.mirrorDone?'checked':''} onchange="STATE.settings.mirrorDone=this.checked;saveLocal()"><span class="slider"></span></label>
+          <label class="toggle"><input type="checkbox" aria-label="時段完成同步任務完成" ${STATE.settings.mirrorDone?'checked':''} onchange="STATE.settings.mirrorDone=this.checked;saveLocal()"><span class="slider"></span></label>
         </div>
         <div class="setting-row">
           <div class="info"><div class="title">重置本週時，自動補預設任務</div><div class="desc">適合每週重新排一次，保持節奏</div></div>
-          <label class="toggle"><input type="checkbox" ${STATE.settings.autoSeed?'checked':''} onchange="STATE.settings.autoSeed=this.checked;saveLocal()"><span class="slider"></span></label>
+          <label class="toggle"><input type="checkbox" aria-label="重置時自動補預設任務" ${STATE.settings.autoSeed?'checked':''} onchange="STATE.settings.autoSeed=this.checked;saveLocal()"><span class="slider"></span></label>
         </div>
         <hr class="sep">
         <div class="flex gap-1 flex-wrap">

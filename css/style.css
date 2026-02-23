@@ -240,5 +240,25 @@ select option{background:var(--bg2);color:var(--tx)}
 .belief-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;font-size:.9rem;line-height:1.7}
 .belief-card .quote{color:var(--accent);font-weight:600;font-size:1rem;margin-bottom:.5rem}
 
+/* Screen reader only */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Slot keyboard assign select */
+.slot-assign-select{margin-top:.35rem;font-size:.8rem;padding:.3rem .5rem}
+
+/* Touch drag slot highlight */
+.slot.touch-over{border-color:var(--accent);background:var(--accent-glow);border-style:dashed}
+
+/* Editing task card */
+.task-item.editing{border-color:var(--accent);background:var(--accent-glow)}
+
+/* iOS auto-zoom prevention */
+@media(max-width:767px){
+  input[type="text"],input[type="number"],textarea,select{font-size:16px}
+}
+
+/* Touch ghost element */
+#touch-ghost{border-radius:var(--radius);box-shadow:0 4px 20px rgba(0,0,0,.3)}
+
 /* Footer */
 footer{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--border);font-size:.8rem;color:var(--tx3);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem}
