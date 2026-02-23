@@ -1,0 +1,23 @@
+{
+  "name": "2026-weekly-task-board",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spyua/2026-weekly-task-board.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/spyua/2026-weekly-task-board/issues"
+  },
+  "homepage": "https://github.com/spyua/2026-weekly-task-board#readme",
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}
